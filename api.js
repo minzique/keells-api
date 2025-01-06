@@ -1,11 +1,22 @@
 import axios from 'axios';
+import dotenv from "dotenv";
 // import { requestToCurl } from './utils';
 // Add cookie storage
 let authCookie = null;
 let userSessionId = null;
 
+dotenv.config({ path: ".env.local" });
+
+const API_VERSIONS = {
+  V1: '1.0',
+  V2: '2.0'
+};
+
+const getBaseUrl = (version = API_VERSIONS.V1) => 
+  `https://zebraliveback.keellssuper.com/${version}`;
+
 const api = axios.create({
-  baseURL: process.env.API_URL || "https://zebraliveback.keellssuper.com/1.0",
+  baseURL: getBaseUrl(),
   headers: {
     "Content-Type": "application/json",
     "Accept": "application/json",
@@ -18,19 +29,38 @@ const api = axios.create({
   // Ensure cookies are sent and received
   // xsrfCookieName: "XSRF-TOKEN",
   // xsrfHeaderName: "X-XSRF-TOKEN",
+  // Add proxy configuration for debugging
+  proxy: process.env.HTTP_PROXY ? {
+    protocol: 'http',
+    host: process.env.HTTP_PROXY.split(':')[0],
+    port: parseInt(process.env.HTTP_PROXY.split(':')[1])
+  } : null
 });
+
+// Version-aware HTTP methods
+const get = async (endpoint, version = API_VERSIONS.V1, params = {}) => {
+  const response = await api.get(endpoint, {
+    baseURL: getBaseUrl(version),
+    params
+  });
+  return response.data;
+};
+
+const post = async (endpoint, data = {}, version = API_VERSIONS.V1) => {
+  const response = await api.post(endpoint, data, {
+    baseURL: getBaseUrl(version)
+  });
+  return response.data;
+};
+
 // Cart endpoints
 export const cartApi = {
   addItems: async (cartItems) => {
-    const response = await api.post('/cart/items', cartItems);
-    return response.data;
+    return await post('/cart/items', cartItems);
   },
 
   getItems: async (outletCode) => {
-    const response = await api.get(`/Web/GetUpdateOutletItemsCart`, {
-      params: { outletCode }
-    });
-    return response.data;
+    return await get('/Web/GetUpdateOutletItemsCart', API_VERSIONS.V1, { outletCode });
   },
 
   removeItem: async (itemId) => {
@@ -42,13 +72,45 @@ export const cartApi = {
 // Web data endpoints
 export const webApi = {
   getInitialData: async (locationCode, shippingDetailsId) => {
-    const response = await api.get(`/Web/GetInitialDataCollection`, {
-      params:{
-        locationCode: locationCode,
-        shippingDetailsId: shippingDetailsId
-      }
+    return await get('/Web/GetInitialDataCollection', API_VERSIONS.V1, {
+      locationCode,
+      shippingDetailsId
     });
-    return response.data;
+  },
+
+  getItemDetails: async ({
+    fromCount = 0,
+    toCount = 20,
+    outletCode,
+    departmentId = "",
+    subDepartmentId = "",
+    categoryId = "",
+    itemDescription = "",
+    itemPricefrom = 0,
+    itemPriceTo = 5000,
+    isFeatured = 0,
+    isPromotionOnly = false,
+    promotionCategory = "",
+    sortBy = "default",
+    brandId = "",
+    storeName = "",
+    subDepartmentCode = "",
+    stockStatus = true,
+    brandName = "",
+  }) => {
+    return await get('/Web/GetItemDetails', API_VERSIONS.V2, {
+      fromCount,
+      toCount,
+      outletCode,
+      departmentId,
+      itemPricefrom,
+      itemPriceTo,
+      sortBy,
+    });
+  },
+  
+  getDepartmentDetails: async (outletCode) => {
+    return await webApi.getInitialData(outletCode, 0).then(r => r.result.departmentDetails);
   }
 };
 
@@ -121,48 +183,48 @@ export const authApi = {
       const response = await api.post('/Login/CredentialLogin', {
         Username: username,
         Password: password
-      }, {
-        withCredentials: true
       });
       
       if (response.data.statusCode === 200) {
         // Handle different response codes from login
-        switch(response.data.result) {
+        switch (response.data.result) {
           case "KOL177": // Session Exceed
-          case "KOL178": // All Outlet Quota Exceed  
+          case "KOL178": // All Outlet Quota Exceed
           case "KOL265": // Site offline for maintenance
             return {
               success: false,
               code: response.data.result,
-              message: response.data.errorList[0].statusMessage
+              message: response.data.errorList[0].statusMessage,
             };
-            
+
           default:
             if (response.data.result.migrationVerified) {
               const { userSessionID } = response.data.result;
               userSessionId = userSessionID;
-              
-              const cookies = response.headers['set-cookie'];
+
+              const cookies = response.headers["set-cookie"];
               if (cookies) {
-                authCookie = cookies.find(cookie => cookie.includes('auth_cookie'));
+                authCookie = cookies.find((cookie) =>
+                  cookie.includes("auth_cookie")
+                );
               }
-              
+
               return {
                 success: true,
-                data: response.data.result
+                data: response.data.result,
               };
             } else {
               // Needs password reset/migration
               return {
                 success: false,
                 requiresPasswordReset: true,
-                data: response.data.result
+                data: response.data.result,
               };
             }
         }
       }
       
-      throw new Error(response.data.errorList[0].statusMessage);
+      throw new Error(response.errorList[0].statusMessage);
     } catch (error) {
       throw new Error('Login failed: ' + (error.message || 'Unknown error'));
     }
@@ -192,7 +254,27 @@ export const authApi = {
   }
 };
 
-
+// their search endpoints
+export const algonomyApi = {
+  searchPage: async (searchTerm, outletCode) => {
+    return await get('/Algonomy/SearchPage', API_VERSIONS.V1, {
+      searchTerm,
+      outletCode
+    });
+  },
+  getCategoryPage: async (categoryId, outletCode) => {
+    return await get('/Algonomy/CategoryPage', API_VERSIONS.V1, {
+      categoryId,
+      outletCode
+    });
+  },
+  getItemDetails: async (itemCode, outletCode) => {
+    return await get('/Algonomy/AddToCartPage', API_VERSIONS.V1, {
+      itemCode,
+      outletCode
+    });
+  }
+};
 
 
 api.interceptors.request.use(
